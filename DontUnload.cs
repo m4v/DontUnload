@@ -1,12 +1,27 @@
+//  Copyright (c) 2013 Elián Hanisch, <lambdae2@gmail.com>
+//
+//  This program is free software: you can redistribute it and/or modify
+//  it under the terms of the GNU Lesser General Public License as published by
+//  the Free Software Foundation, either version 3 of the License, or
+//  (at your option) any later version.
+//
+//  This program is distributed in the hope that it will be useful,
+//  but WITHOUT ANY WARRANTY; without even the implied warranty of
+//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//  GNU Lesser General Public License for more details.
+//
+//  You should have received a copy of the GNU Lesser General Public License
+//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 using System;
 using System.Diagnostics;
+using System.Collections;
 using System.Collections.Generic;
 
 using UnityEngine;
 
 namespace DontUnload
 {
-
 	[KSPAddon(KSPAddon.Startup.Flight, false)]
 	public class DontUnload : MonoBehaviour
 	{
@@ -15,21 +30,18 @@ namespace DontUnload
         float originalLoadDistance;
         Dictionary<Vessel, float> originalPackDistance;
 
+        int updateInterval = 5;
         float distanceMargin = 500;
         /* The distance at what something can land safely seems to be 10km */
         //float safeLandDistance = 10000;
-
         int ModuleParachuteID = "ModuleParachute".GetHashCode ();
-
-        Stopwatch _SW = new Stopwatch ();
-        int _callCounter = 0;
-        long _time, _ticks;
 
         void Start ()
         {
             keepLoaded = new List<Vessel> ();
             originalLoadDistance = Vessel.loadDistance;
             originalPackDistance = new Dictionary<Vessel, float> ();
+            StartCoroutine(updateKeepLoaded());
         }
 
         void OnDestroy ()
@@ -39,25 +51,8 @@ namespace DontUnload
 
 		void Update ()
         {
-#if DEBUG
-            _callCounter++;
-            _SW.Start ();
-#endif
-            activeVessel = FlightGlobals.ActiveVessel;
-
-            /* active vessel is always keeped */
-            /*if (!keepLoaded.Contains (activeVessel)) {
-                keepLoaded.Add (activeVessel);
-            }*/
-
-            List<Vessel> vessels = getVessels ();
-            for (int i = 0; i < vessels.Count; i++) {
-                Vessel vessel = vessels [i];
-                if (!keepLoaded.Contains (vessel)) {
-                    if (vessel.IsControllable || hasParachutes (vessel)) {
-                        keepLoaded.Add (vessel);
-                    }
-                }
+            if (activeVessel != FlightGlobals.ActiveVessel) {
+                activeVessel = FlightGlobals.ActiveVessel;
             }
 
             float maxVesselDistance = 0;
@@ -65,36 +60,14 @@ namespace DontUnload
             for (int i = 0; i < keepLoaded.Count; i++) {
                 Vessel vessel = keepLoaded [i];
                 if (vessel == null) {
-                    keepLoaded.RemoveAt (i);
-                    i--;
                     continue;
                 }
-                //if (vessel != activeVessel) {
-                    if (!checkSituation (vessel)) {
-                        string name = vessel.GetName ();
-                        _debug ("Removing {0} from keep list because {1}", name,
-                                vessel.situation);
-                        if (vessel != activeVessel) {
-                            ScreenMessages.PostScreenMessage (String.Format ("{0} {1}.", name,
-                                                                             vessel.situation),
-                                                              3, ScreenMessageStyle.UPPER_CENTER);
-                        }
-                        vessel.distancePackThreshold = originalPackDistance[vessel];
-                        keepLoaded.RemoveAt (i);
-                        i--;
-                        continue;
-                    }
-                //}
                 /* calculate largest vessel distance */
                 vesselDistance = getDistance (vessel);
                 maxVesselDistance = Mathf.Max (maxVesselDistance, vesselDistance);
 
                 /* update distancePackThreshold */
-                float packDistance;
-                if (!originalPackDistance.TryGetValue(vessel, out packDistance)) {
-                    originalPackDistance[vessel] = vessel.distancePackThreshold;
-                    packDistance = vessel.distancePackThreshold;
-                }
+                float packDistance = originalPackDistance [vessel];
                 if (vesselDistance > (packDistance - distanceMargin)) {
                     /* raise */
                     vessel.distancePackThreshold = vesselDistance + distanceMargin;
@@ -113,26 +86,57 @@ namespace DontUnload
                 Vessel.loadDistance = originalLoadDistance;
             }
 
-#if DEBUG
-            _SW.Stop ();
-            if (_callCounter > 100) {
-                _time = _SW.ElapsedMilliseconds;
-                _ticks = _SW.ElapsedTicks;
-                _SW.Reset ();
-                _callCounter = 0;
+            Debug();
+        }
+
+        IEnumerator updateKeepLoaded ()
+        {
+            while (true) {
+                /* remove vessels from the keep list */
+                for (int i = 0; i < keepLoaded.Count; i++) {
+                    Vessel vessel = keepLoaded[i];
+                    if (vessel == null) {
+                        keepLoaded.RemoveAt (i);
+                        i--;
+                    } else if (!checkSituation (vessel)) {
+                        string name = vessel.GetName ();
+                        dPrint ("Removing {0} from keep list because {1}", name,
+                                vessel.situation);
+                        if (vessel != activeVessel) {
+                            ScreenMessages.PostScreenMessage (String.Format ("{0} {1}", name,
+                                                                             vessel.situation),
+                                                              3, ScreenMessageStyle.UPPER_CENTER);
+                        }
+                        vessel.distancePackThreshold = originalPackDistance[vessel];
+                        keepLoaded.RemoveAt (i);
+                        i--;
+                    }
+                }
+                /* add vessels to the keep list */
+                List<Vessel>.Enumerator enm = FlightGlobals.Vessels.GetEnumerator();
+                while (enm.MoveNext()) {
+                    Vessel vessel = enm.Current;
+                    if (vessel.loaded && !vessel.packed && checkSituation(vessel)) {
+                        if (!keepLoaded.Contains (vessel)) {
+                            if (vessel.IsControllable || hasParachutes (vessel)) {
+                                keepLoaded.Add (vessel);
+                                originalPackDistance[vessel] = vessel.distancePackThreshold;
+                            }
+                        }
+                    }
+                }
+
+                yield return new WaitForSeconds(updateInterval);
             }
-            _debugShowVesselInfo ();
-#endif
         }
 
         bool hasParachutes(Vessel vessel)
         {
-            using (List<Part>.Enumerator enm = vessel.Parts.GetEnumerator()) {
-                while (enm.MoveNext ()) {
-                    Part part = enm.Current;
-                    if (part.Modules.Contains(ModuleParachuteID)) {
-                        return true;
-                    }
+            List<Part>.Enumerator enm = vessel.Parts.GetEnumerator();
+            while (enm.MoveNext ()) {
+                Part part = enm.Current;
+                if (part.Modules.Contains(ModuleParachuteID)) {
+                    return true;
                 }
             }
             return false;
@@ -148,20 +152,6 @@ namespace DontUnload
             return (activeVessel.GetSrfVelocity() - vessel.GetSrfVelocity()).magnitude;
         }
 
-        List<Vessel> getVessels ()
-        {
-            List<Vessel> list = new List<Vessel> ();
-            using (List<Vessel>.Enumerator enm = FlightGlobals.Vessels.GetEnumerator()) {
-                while (enm.MoveNext()) {
-                    Vessel vessel = enm.Current;
-                    if (vessel.loaded && !vessel.packed && checkSituation(vessel)) {
-                        list.Add (vessel);
-                    }
-                }
-            }
-            return list;
-        }
-
         bool checkSituation (Vessel vessel)
         {
             switch (vessel.situation) {
@@ -172,23 +162,39 @@ namespace DontUnload
             } 
         }
 
-        /* Debug methods */
-        Dictionary<Vessel, float> _terrain = new Dictionary<Vessel, float>();
+        /* 
+         * Debug methods
+         */
+
+        bool debug = false;
+        Dictionary<Vessel, float> dTerrain = new Dictionary<Vessel, float>();
 
         [Conditional("DEBUG")]
-        void _debug (string s, params object[] values)
+        void dPrint (string s, params object[] values)
         {
             print (String.Format (s, values));
         }
 
         [Conditional("DEBUG")]
-        void _debugShowVesselInfo ()
+        void Debug ()
         {
+            if (Input.GetKeyDown (KeyCode.F11)) {
+                debug = !debug;
+                if (guiText != null) {
+                    guiText.enabled = debug;
+                }
+            }
+            debugShowVesselInfo ();
+        }
+
+        [Conditional("DEBUG")]
+        void debugShowVesselInfo ()
+        {
+            if (!debug) {
+                return;
+            }
             List<Vessel> vessels = FlightGlobals.Vessels;
             List<string> debugInfo = new List<string>();
-            debugInfo.Add(String.Format ("time {0}/{1:F4} ticks {2}/{3:F4}",
-                                         _time, (float)_time/100,
-                                         _ticks, (float)_ticks/100));
             string name;
             for (int i = 0; i < vessels.Count; i++) {
                 Vessel vessel = vessels [i];
@@ -206,12 +212,12 @@ namespace DontUnload
                 float terrain = 0f;
                 if (vessel != activeVessel) {
                     if (vessel.GetHeightFromTerrain() == -1) {
-                        if (!_terrain.TryGetValue(vessel, out terrain)) {
-                            _terrain[vessel] = distance;
+                        if (!dTerrain.TryGetValue(vessel, out terrain)) {
+                            dTerrain[vessel] = distance;
                             terrain = distance;
                         }
                     } else {
-                        _terrain.Remove (vessel);
+                        dTerrain.Remove (vessel);
                     }
                 }
                 debugInfo.Add (String.Format ("{0}\n{1}\n" +
@@ -234,7 +240,7 @@ namespace DontUnload
             }
             if (guiText == null) {
                 gameObject.AddComponent<GUIText> ();
-                guiText.transform.position = new Vector3 (0.82f, 0.95f, 0f);
+                guiText.transform.position = new Vector3 (0.82f, 0.94f, 0f);
                 guiText.richText = true;
             }
             guiText.text = String.Join ("\n\n", debugInfo.ToArray());
