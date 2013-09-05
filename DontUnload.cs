@@ -208,7 +208,7 @@ namespace DontUnload
                     name = vessel.GetName();
                 }
                 float distance = getDistance(vessel);
-                /* this is for figure more or less at what distance the ground gets removed */
+                /* this is for figure more or less at what distance the ground isn't safe to land */
                 float terrain = 0f;
                 if (vessel != activeVessel) {
                     if (vessel.GetHeightFromTerrain() == -1) {
