@@ -17,7 +17,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 [assembly: AssemblyTitle("DontUnload")]
-[assembly: AssemblyDescription("Plugin for prevent chuted vessels from dissapearing in atmosphere.")]
+[assembly: AssemblyDescription("Plugin for prevent chuted vessels from disappearing in atmosphere.")]
 [assembly: AssemblyProduct("DontUnload")]
 [assembly: AssemblyCopyright("Copyright © 2013, Elián Hanisch. Distributed under the terms of the LGPLv3")]
 [assembly: AssemblyVersion("0.1.*")]
